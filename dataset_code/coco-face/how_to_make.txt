@@ -1,0 +1,5 @@
+1. coco-person.tar 압축풀기
+2. auto_labeling.py 실행
+3. root 디렉토리 이름을 coco-face로 바꾸기
+4. data.yaml 수정
+5. coco-face.tar 압축하기
