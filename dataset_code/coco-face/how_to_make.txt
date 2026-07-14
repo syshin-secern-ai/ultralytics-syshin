@@ -1,0 +1,16 @@
+1. coco-person 만들기 (coco-person/main.py), coco-person/images를 coco-face/images로 복사
+2. auto_labeling.py 실행
+2-1. ORFormer로 키포인트 교정: 5점이 모두 있는 32px 이상 얼굴 (dataset_code/open-images-face/refine_kpts.py, 근거는 그 파일 설명 참고)
+   얼굴이 있는 이미지 목록을 만들어 넘긴다. labels를 제자리에서 고치므로 split마다 한 번만 실행한다 (cd ../../data/coco-face 후 목록 생성):
+   for s in train val; do find labels/$s -name "*.txt" -size +0 -printf "./images/$s/%f\n" | sed 's/\.txt$/.jpg/' > refine_$s.txt; done
+   uv run --project ../infer-kit --with pyyaml python dataset_code/open-images-face/refine_kpts.py ../../data/coco-face/refine_train.txt
+   uv run --project ../infer-kit --with pyyaml python dataset_code/open-images-face/refine_kpts.py ../../data/coco-face/refine_val.txt
+   WholeBody와 매칭되는 얼굴도 일단 교정되지만 3번에서 사람 라벨로 다시 덮어쓴다.
+   주의: Slurm 노드에서는 uv run을 쓰지 않는다 (UV_PYTHON_INSTALL_DIR이 전달되지 않아 infer-kit/.venv를 노드 로컬 파이썬으로 다시 만든다).
+   노드에서 돌리는 방법은 dataset_code/open-images-face/how_to_make.txt 3-1번 참고.
+3. wb_kpts.py 실행: 사람이 없는 이미지의 얼굴을 지우고, WholeBody와 매칭되는 얼굴의 키포인트를 사람 라벨로 교체 (split마다 실행)
+   python wb_kpts.py coco_wholebody_train_v1.0.json coco-face/labels/train coco-face/labels_wb/train
+   python wb_kpts.py coco_wholebody_val_v1.0.json coco-face/labels/val coco-face/labels_wb/val
+   labels를 지우고 labels_wb를 labels로 이름 바꾸기
+4. data.yaml을 widerface/data.yaml로 덮어쓰기
+5. coco-face.tar 압축하기

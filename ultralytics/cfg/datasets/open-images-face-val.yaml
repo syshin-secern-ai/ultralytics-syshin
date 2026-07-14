@@ -1,0 +1,14 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# Open Images V7 validation의 Human face GT 박스로 얼굴 검출만 평가한다 (dataset_code/open-images-face)
+# 키포인트 GT가 없어 라벨의 키포인트는 모두 0이다. Box 지표만 보고 Pose 지표는 무시한다.
+# Example usage: yolo pose val data=open-images-face-val.yaml model=best.pt
+
+path: ../../data/open-images-face
+train: images/val # 쓰지 않음 (필수 키)
+val: images/val
+kpt_shape: [5, 3]
+flip_idx: [1, 0, 2, 4, 3]
+kpt_oks_sigmas: [0.1, 0.1, 0.1, 0.1, 0.1]
+names:
+  0: face

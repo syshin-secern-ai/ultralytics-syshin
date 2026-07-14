@@ -1,0 +1,35 @@
+모든 명령은 저장소 루트에서 실행한다. 결과물은 ../../data/open-images-face에 생긴다.
+
+1. main.py 실행: Human face 이미지를 받아 images/train(심볼릭 링크), labels_gt/train, fiftyone/(원본) 생성
+   fiftyone만 있으면 되므로 .venv와 분리된 가상환경에서 실행했다 (uv venv fo-venv && uv pip install --python fo-venv/bin/python fiftyone)
+   인자 없이 실행하면 train 전체(331,627장, 89GB)를 받는다. 일부만 받으려면 main.py train 1000처럼 준다.
+   fo-venv/bin/python dataset_code/open-images-face/main.py
+2. auto_labeling.py 실행: 얼굴 pose 모델로 labels/train 생성 (모델은 MODEL, 대상 폴더는 ROOT 환경변수로 변경)
+   기본은 한 노드의 GPU 8개. 8개가 빈 노드가 없으면 --gpus로 줄인다 (4개로 28.8만 장에 약 40분).
+   sbatch --gpus=4 script/sbatch_auto_labeling.sh
+3. match.py 실행: GT와 1:1로 맞는 이미지만 train.txt에 기록
+   python dataset_code/open-images-face/match.py ../../data/open-images-face/labels_gt/train ../../data/open-images-face/labels/train ../../data/open-images-face/train.txt
+3-1. refine_kpts.py 실행: train.txt에 든 32px 이상 얼굴의 키포인트를 ORFormer로 교정 (labels/train을 제자리에서 고치므로 한 번만 실행)
+   GPU 1개로 약 5시간. 뒤에 I N을 붙이면 목록을 N등분한 I번째만 처리하므로 GPU 여러 개로 나눠 돌릴 수 있다.
+   Slurm 노드에서는 uv run을 쓰지 않는다 (UV_PYTHON_INSTALL_DIR이 전달되지 않아 infer-kit/.venv를 노드 로컬 파이썬으로 다시 만든다).
+   infer-kit의 파이썬을 직접 부르고, infer-kit에 없는 pyyaml만 PYTHONPATH로 넘긴다:
+   mkdir -p runs/pyyaml && ln -sfn $PWD/.venv/lib/python3.14/site-packages/yaml $PWD/.venv/lib/python3.14/site-packages/_yaml runs/pyyaml/
+   srun -p a100 --gpus=1 --cpus-per-task=8 --export=ALL,PYTHONPATH=$PWD/runs/pyyaml ../infer-kit/.venv/bin/python dataset_code/open-images-face/refine_kpts.py ../../data/open-images-face/train.txt
+4. face-mix.yaml의 train에 open-images-face/train.txt 추가 (val은 그대로)
+5. 폴더 정리 (cd ../../data/open-images-face 후 실행)
+   심볼릭 링크를 원본 이미지 파일로 바꾼다:
+   python -c "import os; s='fiftyone/open-images-v7/train/data'; [os.replace(os.path.join(s, e.name), e.path) for e in list(os.scandir('images/train')) if e.is_symlink()]"
+   제외된 이미지와 주석 csv가 남은 fiftyone/, auto_labeling.py가 만든 빈 val 폴더를 지운다 (지우면 main.py를 다시 돌릴 때 전부 새로 받는다):
+   prm -r fiftyone && rmdir fiftyone images/val labels/val
+6. open-images-face.tar 압축하기 (cd ../../data 후 실행)
+   ptar cf open-images-face.tar open-images-face
+
+평가 세트 (Open Images validation 2,618장, GT 얼굴 4,617개. 학습에 쓰지 않으며 Box 지표만 본다)
+7. main.py val 실행: images/val(심볼릭 링크), labels_gt/val, fiftyone/ 생성
+   fo-venv/bin/python dataset_code/open-images-face/main.py val
+8. 평가용 라벨 만들기와 폴더 정리 (cd ../../data/open-images-face 후 실행)
+   키포인트 GT가 없으므로 GT 박스 뒤에 0을 15개 붙여 labels/val을 만든다:
+   python -c "import os; os.makedirs('labels/val', exist_ok=True); [open('labels/val/' + e.name, 'w').writelines(l.rstrip() + ' 0' * 15 + '\n' for l in open(e.path)) for e in os.scandir('labels_gt/val')]"
+   5번과 같이 심볼릭 링크를 원본으로 바꾸고(경로의 images/train을 images/val로, fiftyone 쪽 train을 validation으로) fiftyone/을 지운다.
+9. 검증: Pose 지표는 의미가 없으니 무시한다
+   yolo pose val data=open-images-face-val.yaml model=runs/pose/<run>/weights/best.pt

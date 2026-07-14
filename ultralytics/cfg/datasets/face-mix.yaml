@@ -1,0 +1,18 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# WIDER FACE + COCO-face + Open Images face 5-keypoint face dataset (no merged copy; images are read from each source)
+# Example usage: yolo pose train data=face-mix.yaml
+
+path: ../../data
+train:
+  - widerface/images/train
+  - coco-face/images/train
+  - open-images-face/train.txt # GT 박스와 1:1로 맞는 오토라벨 이미지만 (dataset_code/open-images-face)
+val:
+  - widerface/images/val
+  - coco-face/images/val
+kpt_shape: [5, 3]
+flip_idx: [1, 0, 2, 4, 3]
+kpt_oks_sigmas: [0.1, 0.1, 0.1, 0.1, 0.1]
+names:
+  0: face

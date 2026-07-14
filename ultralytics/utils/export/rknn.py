@@ -24,6 +24,7 @@ def onnx2rknn(
     prefix: str = "",
     batch: int = 1,
     head: str | None = None,
+    quantized_algorithm: str = "normal",
 ) -> str:
     """Export an ONNX model to RKNN format for Rockchip NPUs with optional INT8 quantization.
 
@@ -42,6 +43,7 @@ def onnx2rknn(
             at the head's per-level output convolutions and save the remaining box decode as ``tail.onnx`` to run on the
             host in floating point. INT8 builds for FP16-capable targets also use RKNN Toolkit ``auto_hybrid`` to keep
             high-error layers in floating point.
+        quantized_algorithm (str): INT8 calibration algorithm, ``"normal"`` (fast) or ``"mmse"`` (slow, lowest error).
 
     Returns:
         (str): Path to the exported ``_rknn_model`` directory.
@@ -97,6 +99,7 @@ def onnx2rknn(
     config = {"mean_values": [[0, 0, 0]], "std_values": [[255, 255, 255]], "target_platform": name}
     outputs = None
     if use_int8:
+        config["quantized_algorithm"] = quantized_algorithm
         if not int8_only:
             config["auto_hybrid_cos_thresh"] = 0.999
         if head:
