@@ -718,7 +718,6 @@ class v8PoseLoss(v8DetectionLoss):
         super().__init__(model, tal_topk, tal_topk2)
         self.loss_names = ("box_loss", "pose_loss", "kobj_loss", *self.loss_names[1:])
         self.kpt_shape = model.model[-1].kpt_shape
-        self.bce_pose = nn.BCEWithLogitsLoss()
         is_pose = self.kpt_shape == [17, 3]
         nkpt = self.kpt_shape[0]  # number of keypoints
 
@@ -834,9 +833,19 @@ class v8PoseLoss(v8DetectionLoss):
             kpts_loss = self.keypoint_loss(pred_kpt, gt_kpt, kpt_mask, area)  # pose loss
 
             if pred_kpt.shape[-1] == 3:
-                kpts_obj_loss = self.bce_pose(pred_kpt[..., 2], kpt_mask.float())  # keypoint obj loss
+                kpts_obj_loss = self.kpt_vis_loss(pred_kpt[..., 2], gt_kpt[..., 2])  # keypoint visibility loss
 
         return kpts_loss, kpts_obj_loss
+
+    @staticmethod
+    def kpt_vis_loss(pred: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """Keypoint visibility BCE with target v==2 (visible); v=1 is located but occluded (target 0).
+
+        v=3 (located, visibility unknown) and instances with no labeled keypoint at all are excluded.
+        """
+        weight = ((v != 3) & (v != 0).any(-1, keepdim=True)).float()
+        loss = F.binary_cross_entropy_with_logits(pred, (v == 2).float(), weight, reduction="sum")
+        return loss / weight.sum().clamp(min=1)
 
 
 class PoseLoss26(v8PoseLoss):
@@ -1013,7 +1022,7 @@ class PoseLoss26(v8PoseLoss):
                 rle_loss = self.calculate_rle_loss(pred_kpt, gt_kpt, kpt_mask)
                 rle_loss = rle_loss.clamp(min=0)
             if pred_kpt.shape[-1] == 3 or pred_kpt.shape[-1] == 5:
-                kpts_obj_loss = self.bce_pose(pred_kpt[..., 2], kpt_mask.float())  # keypoint obj loss
+                kpts_obj_loss = self.kpt_vis_loss(pred_kpt[..., 2], gt_kpt[..., 2])  # keypoint visibility loss
 
         return kpts_loss, kpts_obj_loss, rle_loss
 
