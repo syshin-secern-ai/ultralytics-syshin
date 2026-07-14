@@ -1475,7 +1475,7 @@ class PoseMetrics(DetMetrics):
         """
         super().__init__(names)
         self.pose = Metric()
-        self.stats["tp_p"] = []  # add additional stats for pose
+        self.stats.update(tp_p=[], ignore_p=[], labeled_p=[])  # add additional stats for pose
 
     def update_stats(self, stat: dict[str, Any]) -> None:
         """Update statistics by appending new values to existing stat collections.
@@ -1485,7 +1485,10 @@ class PoseMetrics(DetMetrics):
                 keys in self.stats, plus 'im_name' for per-image metrics.
         """
         super().update_stats(stat)  # update box stats
-        self.pose.update_image_metrics(stat["tp_p"], stat["target_cls"], stat["pred_cls"], stat["im_name"])
+        keep = ~stat["ignore_p"]  # score pose only on ground truth that has keypoint labels
+        self.pose.update_image_metrics(
+            stat["tp_p"][keep], stat["target_cls"][stat["labeled_p"]], stat["pred_cls"][keep], stat["im_name"]
+        )
 
     def clear_image_metrics(self) -> None:
         """Clear stored per-image metrics."""
@@ -1504,11 +1507,12 @@ class PoseMetrics(DetMetrics):
             (dict[str, np.ndarray]): Dictionary containing concatenated statistics arrays.
         """
         stats = DetMetrics.process(self, save_dir, plot, on_plot=on_plot)  # process box stats
+        keep = ~stats["ignore_p"]
         results_pose = ap_per_class(
-            stats["tp_p"],
-            stats["conf"],
-            stats["pred_cls"],
-            stats["target_cls"],
+            stats["tp_p"][keep],
+            stats["conf"][keep],
+            stats["pred_cls"][keep],
+            stats["target_cls"][stats["labeled_p"]],
             plot=plot,
             on_plot=on_plot,
             save_dir=save_dir,

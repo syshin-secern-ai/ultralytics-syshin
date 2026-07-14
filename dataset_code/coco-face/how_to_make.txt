@@ -1,0 +1,9 @@
+1. coco-person.tar 압축풀기
+2. auto_labeling.py 실행
+3. root 디렉토리 이름을 coco-face로 바꾸기
+4. wb_kpts.py 실행: WholeBody와 매칭되는 얼굴의 키포인트를 사람 라벨로 교체 (split마다 실행)
+   python wb_kpts.py coco_wholebody_train_v1.0.json coco-face/labels/train coco-face/labels_wb/train
+   python wb_kpts.py coco_wholebody_val_v1.0.json coco-face/labels/val coco-face/labels_wb/val
+   labels를 지우고 labels_wb를 labels로 이름 바꾸기
+5. data.yaml을 widerface/data.yaml로 덮어쓰기
+6. coco-face.tar 압축하기

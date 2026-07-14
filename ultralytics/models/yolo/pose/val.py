@@ -10,7 +10,7 @@ import torch
 
 from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.utils import ops
-from ultralytics.utils.metrics import OKS_SIGMA, PoseMetrics, kpt_iou
+from ultralytics.utils.metrics import OKS_SIGMA, PoseMetrics, box_iou, kpt_iou
 
 
 class PoseValidator(DetectionValidator):
@@ -172,7 +172,9 @@ class PoseValidator(DetectionValidator):
 
         Returns:
             (dict[str, np.ndarray]): Dictionary containing the box true positives 'tp' and the pose true positives
-                'tp_p', each with shape (N, 10) for 10 IoU/OKS thresholds.
+                'tp_p', each with shape (N, 10) for 10 IoU/OKS thresholds, plus the pose masks 'ignore_p' with shape
+                (N,) for predictions on unlabeled ground truth and 'labeled_p' with shape (M,) for ground truth that
+                has keypoint labels.
 
         Notes:
             `0.53` scale factor used in area computation is referenced from
@@ -180,6 +182,8 @@ class PoseValidator(DetectionValidator):
         """
         tp = super()._process_batch(preds, batch)
         gt_cls = batch["cls"]
+        labeled = (batch["keypoints"][..., 2] != 0).any(1)  # ground truth without keypoint labels cannot be scored
+        ignore_p = np.zeros(preds["cls"].shape[0], dtype=bool)
         if gt_cls.shape[0] == 0 or preds["cls"].shape[0] == 0:
             tp_p = np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)
         else:
@@ -187,7 +191,10 @@ class PoseValidator(DetectionValidator):
             area = ops.xyxy2xywh(batch["bboxes"])[:, 2:].prod(1) * 0.53
             iou = kpt_iou(batch["keypoints"], preds["keypoints"], sigma=self.sigma, area=area)
             tp_p = self.match_predictions(preds["cls"], gt_cls, iou).cpu().numpy()
-        tp.update({"tp_p": tp_p})  # update tp with kpts IoU
+            # As in COCO keypoint evaluation, predictions on unlabeled ground truth are ignored rather than counted FP
+            box_iou_max, i = box_iou(batch["bboxes"], preds["bboxes"]).max(0)
+            ignore_p = ((box_iou_max >= 0.5) & ~labeled[i]).cpu().numpy() & ~tp_p[:, 0]
+        tp.update({"tp_p": tp_p, "ignore_p": ignore_p, "labeled_p": labeled.cpu().numpy()})  # update tp with kpts IoU
         return tp
 
     def gather_stats(self) -> None:
