@@ -22,6 +22,8 @@ class OpenVINOBackend(BaseBackend):
     selection and Intel-specific device targeting.
     """
 
+    _core = None  # one ov.Core per process, see load_model()
+
     def load_model(self, weight: str | Path) -> None:
         """Load an Intel OpenVINO IR model from a .xml/.bin file pair or model directory.
 
@@ -32,7 +34,8 @@ class OpenVINOBackend(BaseBackend):
         check_requirements("openvino>=2024.0.0")
         import openvino as ov
 
-        core = ov.Core()
+        # A second Core re-initializes the NPU plugin, which segfaults in libze_loader on hosts without an NPU
+        core = OpenVINOBackend._core = OpenVINOBackend._core or ov.Core()
         if WINDOWS:  # Avoid reduced-precision CPU kernel failures without restricting native FP32 instructions
             core.set_property("CPU", {"INFERENCE_PRECISION_HINT": ov.Type.f32})
             # Windows VMs that report AMX as enabled can still fault on AMX INT8 kernels (0xc000001d), see

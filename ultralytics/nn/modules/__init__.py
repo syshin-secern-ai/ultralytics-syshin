@@ -106,6 +106,7 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
+from .yunet import Add, Conv4LayerBlock, ConvDPUnit, YuNetPoseHead, YuNetStem
 
 __all__ = (
     "AIFI",
@@ -128,6 +129,7 @@ __all__ = (
     "A2C2f",
     "AConv",
     "ADown",
+    "Add",
     "Attention",
     "BNContrastiveHead",
     "Bottleneck",
@@ -147,6 +149,8 @@ __all__ = (
     "ContrastiveHead",
     "Conv",
     "Conv2",
+    "Conv4LayerBlock",
+    "ConvDPUnit",
     "ConvTranspose",
     "DWConv",
     "DWConvTranspose2d",
@@ -189,5 +193,7 @@ __all__ = (
     "YOLOEDetect",
     "YOLOESegment",
     "YOLOESegment26",
+    "YuNetPoseHead",
+    "YuNetStem",
     "v10Detect",
 )

@@ -69,6 +69,8 @@ class RKNNBackend(BaseBackend):
         """
         im = (im.cpu().numpy() * 255).astype("uint8")
         y = self.model.inference(inputs=[im])
+        if y[0].ndim == 4:  # rknn_raw per-stride raw outputs (single-output models emit one BCN tensor)
+            return [self._decode_stride(y, im.shape[1])]
         if self.tail:  # INT8 exports decode head outputs on the host in floating point with a batch-1 tail graph
             feeds = [
                 {t.name: v[i : i + 1].astype(np.float32) for t, v in zip(self.tail.get_inputs(), y)}
@@ -76,3 +78,27 @@ class RKNNBackend(BaseBackend):
             ]
             y = [np.concatenate(x) for x in zip(*(self.tail.run(None, f) for f in feeds))]
         return y
+
+    def _decode_stride(self, y: list, imgsz: int) -> torch.Tensor:
+        """Decode ``rknn_raw`` per-stride raw outputs into the standard (bs, 4+nc+nk, anchors) inference tensor.
+
+        Output order matches the ONNX export: bbox_s8, cls_s8, bbox_s16, cls_s16, bbox_s32, cls_s32, then kpt_s8,
+        kpt_s16, kpt_s32 for pose models (detect ends after bbox/cls). Strides are derived from each bbox feature map
+        size. cls and keypoint visibility are already sigmoid-activated on-graph, and bbox is raw ltrb grid-unit
+        distances (reg_max=1, no DFL). The math mirrors ``Detect._get_decode_boxes`` / ``Pose26.kpts_decode``, so the
+        result feeds ``non_max_suppression`` like any non-export inference output.
+        """
+        from ultralytics.utils.tal import dist2bbox, make_anchors
+
+        nl = len(y) // (3 if self.task == "pose" else 2)  # number of stride levels
+        bbox = [torch.from_numpy(y[2 * i]) for i in range(nl)]
+        cls = [torch.from_numpy(y[2 * i + 1]) for i in range(nl)]
+        anchors, strides = (a.transpose(0, 1) for a in make_anchors(bbox, [imgsz // b.shape[2] for b in bbox], 0.5))
+        dbox = dist2bbox(torch.cat([b.flatten(2) for b in bbox], 2), anchors.unsqueeze(0), xywh=True, dim=1) * strides
+        pred = [dbox, torch.cat([c.flatten(2) for c in cls], 2)]
+        if self.task == "pose":
+            bs = y[0].shape[0]
+            k = torch.cat([torch.from_numpy(o).flatten(2) for o in y[2 * nl :]], 2).view(bs, *self.kpt_shape, -1)
+            xy = (k[:, :, :2] + anchors) * strides
+            pred.append(torch.cat([xy, k[:, :, 2:3]], 2).view(bs, self.kpt_shape[0] * self.kpt_shape[1], -1))
+        return torch.cat(pred, 1)
