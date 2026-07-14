@@ -22,6 +22,7 @@ def onnx2rknn(
     metadata: dict | None = None,
     prefix: str = "",
     batch: int = 1,
+    quantized_algorithm: str = "normal",
 ) -> str:
     """Export an ONNX model to RKNN format for Rockchip NPUs with optional INT8 quantization.
 
@@ -37,6 +38,7 @@ def onnx2rknn(
             ``auto_hybrid``, which keeps high-error layers in floating point.
         prefix (str): Prefix for log messages.
         batch (int): Inference batch size applied by RKNN Toolkit after loading the batch-1 ONNX model.
+        quantized_algorithm (str): INT8 calibration algorithm, ``"normal"`` (fast) or ``"mmse"`` (slow, lowest error).
 
     Returns:
         (str): Path to the exported ``_rknn_model`` directory.
@@ -78,6 +80,8 @@ def onnx2rknn(
 
     rknn = RKNN(verbose=False)
     config = {"mean_values": [[0, 0, 0]], "std_values": [[255, 255, 255]], "target_platform": name}
+    if use_int8:
+        config["quantized_algorithm"] = quantized_algorithm
     _check_rknn_return(rknn.config(**config), "config")
     _check_rknn_return(rknn.load_onnx(model=onnx_file), "load_onnx")
     build_kwargs = {"do_quantization": use_int8}
