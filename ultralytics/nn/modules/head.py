@@ -180,6 +180,16 @@ class Detect(nn.Module):
         self, x: list[torch.Tensor]
     ) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Concatenates and returns predicted bounding boxes and class probabilities."""
+        # RKNN raw export: emit per-stride box (undecoded DFL logits) and sigmoid-cls tensors; decode/NMS run on CPU.
+        if self.export and self.format == "rknn_raw":
+            box_head = self.cv2 if self.cv2 is not None else self.one2one_cv2  # None after fuse() on end2end models
+            cls_head = self.cv3 if self.cv3 is not None else self.one2one_cv3
+            y = []
+            for i in range(self.nl):
+                y.append(box_head[i](x[i]))
+                y.append(cls_head[i](x[i]).sigmoid())
+            return y
+
         preds = self.forward_head(x, **self.one2many)
         if getattr(self, "one2one_cv2", None) is not None:
             x_detach = [xi.detach() for xi in x] if self.training else x  # detach keeps one2one out of the backbone
@@ -586,6 +596,24 @@ class Pose(Detect):
         """Returns the one-to-one head components."""
         return {"box_head": self.one2one_cv2, "cls_head": self.one2one_cv3, "pose_head": self.one2one_cv4}
 
+    def forward(self, x: list[torch.Tensor]):
+        """Perform forward pass through the YOLO Pose head and return predictions."""
+        # RKNN raw export: emit per-stride keypoint tensors (raw x,y + sigmoid visibility) alongside detect outputs.
+        if self.export and self.format == "rknn_raw":
+            pose_head = self.cv4 if self.cv4 is not None else self.one2one_cv4  # None after fuse() on end2end models
+            kpts = []
+            for i in range(self.nl):
+                kpt = pose_head[i](x[i])
+                bs, c, h, w = kpt.shape
+                ndim = self.kpt_shape[1]
+                kpt = kpt.reshape(bs, self.kpt_shape[0], ndim, h, w)
+                if ndim == 3:
+                    kpt = torch.cat([kpt[:, :, :2], kpt[:, :, 2:3].sigmoid()], dim=2)  # sigmoid visibility only
+                kpts.append(kpt.reshape(bs, c, h, w))
+            return Detect.forward(self, x), kpts
+
+        return super().forward(x)
+
     def _inference(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
         """Decode predicted bounding boxes and class probabilities, concatenated with keypoints."""
         preds = super()._inference(x)
@@ -687,6 +715,25 @@ class Pose26(Pose):
             "kpts_head": self.one2one_cv4_kpts,
             "kpts_sigma_head": self.one2one_cv4_sigma,
         }
+
+    def forward(self, x: list[torch.Tensor]):
+        """Perform forward pass through the YOLO26 Pose head and return predictions."""
+        # RKNN raw export: emit per-stride keypoint tensors (raw x,y + sigmoid visibility) alongside detect outputs.
+        if self.export and self.format == "rknn_raw":
+            pose_head = self.cv4 if self.cv4 is not None else self.one2one_cv4  # None after fuse() on end2end models
+            kpts_head = self.cv4_kpts if self.cv4_kpts is not None else self.one2one_cv4_kpts
+            kpts = []
+            for i in range(self.nl):
+                kpt = kpts_head[i](pose_head[i](x[i]))  # cv4 extracts features, cv4_kpts projects to keypoints
+                bs, c, h, w = kpt.shape
+                ndim = self.kpt_shape[1]
+                kpt = kpt.reshape(bs, self.kpt_shape[0], ndim, h, w)
+                if ndim == 3:
+                    kpt = torch.cat([kpt[:, :, :2], kpt[:, :, 2:3].sigmoid()], dim=2)  # sigmoid visibility only
+                kpts.append(kpt.reshape(bs, c, h, w))
+            return Detect.forward(self, x), kpts
+
+        return super().forward(x)
 
     def forward_head(
         self,

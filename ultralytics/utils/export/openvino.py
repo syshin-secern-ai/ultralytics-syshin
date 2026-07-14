@@ -69,6 +69,7 @@ def torch2openvino(
             # Calibrate on the full dataset like other INT8 backends, not nncf's 300-batch default
             subset_size=calibration_dataset.get_length() or 300,
             ignored_scope=ignored_scope,
+            fast_bias_correction=False,
         )
 
     if output_dir is not None:
