@@ -219,6 +219,17 @@ def export_formats():
             ["batch", "name", "quantize", "opset", "simplify", "data", "fraction"],
             "isolated-rknn",
         ],
+        [
+            # Per-stride raw RKNN (DFL decode + NMS run on CPU at inference, via RKNNBackend._decode_stride).
+            # Unlike 'rknn', undecoded outputs keep every tensor's INT8 range small (rknn_model_zoo layout).
+            "RKNN raw",
+            "rknn_raw",
+            "_rknn_raw_model",
+            False,
+            False,
+            ["batch", "name", "quantize", "opset", "simplify", "data", "fraction"],
+            "isolated-rknn",
+        ],
         ["ExecuTorch", "executorch", "_executorch_model", True, False, ["batch"], "executorch"],
         [
             "Axelera AI",
@@ -412,7 +423,7 @@ EXPORT_ENVS = {
 
 # Export precision support per format. Unset/32 requests are FP32 except for formats listed in FP32_UNSUPPORTED_FORMATS.
 FP16_FORMATS = frozenset(
-    {"torchscript", "onnx", "openvino", "engine", "coreml", "mnn", "ncnn", "rknn", "ascend", "coreai"}
+    {"torchscript", "onnx", "openvino", "engine", "coreml", "mnn", "ncnn", "rknn", "rknn_raw", "ascend", "coreai"}
 )
 INT8_FORMATS = frozenset(
     {
@@ -425,6 +436,7 @@ INT8_FORMATS = frozenset(
         "mnn",
         "imx",
         "rknn",
+        "rknn_raw",
         "axelera",
         "deepx",
         "hailo",
@@ -435,7 +447,9 @@ W8A16_FORMATS = frozenset(
     {"coreml", "imx", "qnn", "litert"}
 )  # INT8 weights + 16-bit activations (FP16; INT16 on LiteRT)
 W8A32_FORMATS = frozenset({"litert"})  # INT8 weights + FP32 activations (dynamic/weight-only INT8, no calibration)
-FP32_UNSUPPORTED_FORMATS = frozenset({"edgetpu", "imx", "rknn", "axelera", "deepx", "qnn", "hailo", "ascend"})
+FP32_UNSUPPORTED_FORMATS = frozenset(
+    {"edgetpu", "imx", "rknn", "rknn_raw", "axelera", "deepx", "qnn", "hailo", "ascend"}
+)
 # (label, supporting formats) per quantize precision, used to list valid options in errors. 32/None (FP32) is universal except FP32_UNSUPPORTED_FORMATS.
 QUANTIZE_PRECISIONS = (
     ("16 (FP16)", FP16_FORMATS),
@@ -720,8 +734,8 @@ class Exporter:
         self.imgsz = check_imgsz(self.args.imgsz, stride=model.stride, min_dim=2)  # check image size
         if fmt == "axelera" and min(self.imgsz) < 64:
             raise ValueError(f"Axelera export requires imgsz>=64, but got imgsz={self.imgsz}.")
-        if fmt == "rknn":
-            if self.args.quantize == 8 and model.task != "detect":
+        if fmt in {"rknn", "rknn_raw"}:
+            if fmt == "rknn" and self.args.quantize == 8 and model.task != "detect":
                 raise ValueError(
                     "Rockchip RKNN INT8 export is only supported for detection models. "
                     "Use FP16 (quantize=16) for other tasks."
@@ -1083,7 +1097,19 @@ class Exporter:
             assert TORCH_1_13, f"'nms=True' ONNX export requires torch>=1.13 (found torch=={TORCH_VERSION})"
 
         f = str(self.file.with_suffix(".onnx"))
-        output_names = ["output0", "output1"] if self.model.task == "segment" else ["output0"]
+        if self.args.format == "rknn_raw":
+            f = str(self.file.with_name(f"{self.file.stem}_rknn_raw.onnx"))  # never clobber a plain ONNX export
+            # Name the raw per-stride outputs semantically so on-device post-processing can map them by name.
+            strides = self.model.stride.int().tolist()
+            output_names = []
+            for s in strides:
+                output_names += [f"bbox_s{s}", f"cls_s{s}"]
+            if self.model.task == "pose":
+                output_names += [f"kpt_s{s}" for s in strides]
+        elif self.model.task == "segment":
+            output_names = ["output0", "output1"]
+        else:
+            output_names = ["output0"]
         dynamic = self.args.dynamic
         if dynamic:
             dynamic = {"images": {0: "batch", 2: "height", 3: "width"}}  # shape(1,3,640,640)
@@ -1536,12 +1562,21 @@ class Exporter:
         """Export YOLO model to RKNN format with optional INT8 quantization."""
         from ultralytics.utils.export.rknn import onnx2rknn
 
+        raw = self.args.format == "rknn_raw"
+        if raw:
+            assert self.model.task in {"detect", "pose"}, (
+                f"format='rknn_raw' supports detect and pose tasks only, but got task='{self.model.task}'. "
+                "Use format='rknn' for other tasks."
+            )
+            self.args.simplify = True  # force onnxslim for a clean, RKNN-friendly graph
         if self.args.opset and self.args.opset > 19:
             LOGGER.warning(f"{prefix} rknn-toolkit2 requires opset<=19, setting opset=19.")
         self.args.opset = min(self.args.opset or 19, 19)  # rknn-toolkit expects opset<=19
         self.im = self.im[:1]  # RKNN Toolkit expands the batch after calibrating the batch-1 ONNX model
         f_onnx = self.export_onnx()
-        output_dir = Path(str(self.file).replace(self.file.suffix, f"_rknn_model{os.sep}"))
+        # Match the OpenVINO convention so INT8 and FP16 builds can coexist side by side
+        suffix = f"_{'int8_' if self.args.quantize == 8 else ''}rknn{'_raw' if raw else ''}_model{os.sep}"
+        output_dir = Path(str(self.file).replace(self.file.suffix, suffix))
         rknn_dataset = None
         if self.args.quantize == 8:
             dataloader = self.get_int8_calibration_dataloader(prefix)
@@ -1565,7 +1600,9 @@ class Exporter:
                 prefix=prefix,
             )
         finally:
-            if self.args.quantize == 8:  # INT8 graphs hold normalized coordinates, so they are not reusable
+            # Single-output INT8 graphs hold normalized coordinates, so they are not reusable; the per-stride
+            # raw ONNX is quantization-independent and stays useful (e.g. host-side validation), so keep it.
+            if self.args.quantize == 8 and not raw:
                 Path(f_onnx).unlink(missing_ok=True)
 
     @try_export
@@ -1587,6 +1624,15 @@ class Exporter:
             metadata=self.metadata,
             prefix=prefix,
         )
+
+    def export_rknn_raw(self, prefix=colorstr("RKNN raw:")):  # noqa: B008
+        """Export raw per-stride outputs to Rockchip RKNN with optional INT8 quantization.
+
+        Unlike ``format='rknn'`` (which decodes boxes on-graph), this emits undecoded per-stride bbox/cls(/kpt)
+        tensors so every tensor keeps a small INT8 range - the quantization-friendly layout used by rknn_model_zoo.
+        DFL decode and NMS run on the CPU at inference via ``RKNNBackend._decode_stride``.
+        """
+        return self.export_rknn(prefix=prefix)
 
     @try_export
     def export_imx(self, prefix=colorstr("IMX:")):  # noqa: B008

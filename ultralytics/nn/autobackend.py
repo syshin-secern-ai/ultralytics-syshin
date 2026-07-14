@@ -165,6 +165,7 @@ class AutoBackend(nn.Module):
         "ncnn": NCNNBackend,
         "imx": ONNXIMXBackend,
         "rknn": RKNNBackend,
+        "rknn_raw": RKNNBackend,
         "triton": TritonBackend,
         "executorch": ExecuTorchBackend,
         "axelera": AxeleraBackend,
@@ -263,7 +264,7 @@ class AutoBackend(nn.Module):
         elif channels_last:
             LOGGER.warning(f"'channels_last=True' applies only to native PyTorch models, ignoring format='{format}'.")
 
-        self.nhwc = format in {"coreml", "saved_model", "pb", "edgetpu", "rknn"}
+        self.nhwc = format in {"coreml", "saved_model", "pb", "edgetpu", "rknn", "rknn_raw"}
         self.format = format
 
         # Ensure backend has names (fallback to default if not set by metadata)

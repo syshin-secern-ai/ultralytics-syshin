@@ -1,0 +1,42 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# YuNet-n backbone + SPPF at P5 + TFPN neck (from https://github.com/ShiqiYu/libfacedetection.train)
+# with YOLO26 Pose26 head, for face detection with 5-point landmarks.
+# P3/8 - P5/32 outputs, all 64 channels (yunet_n configuration).
+# Same as the yunet_n backbone but with an SPPF block appended to the P5 backbone stage
+# to enlarge the effective receptive field (propagates to P4/P3 via TFPN top-down add).
+
+# Parameters
+nc: 1 # number of classes (face)
+end2end: True # one2many head + NMS (loss: PoseLoss26 with RLE, flow model is train-only)
+reg_max: 1 # DFL bins (1 = direct box regression, no DFL)
+kpt_shape: [5, 3] # 5 facial landmarks, (x, y, visible)
+
+# YuNet-n backbone
+# Original: stage_channels=((3,16,16),(16,64),(64,64),(64,64),(64,64),(64,64)),
+#           downsample_idx=(0,2,3,4), out_idx=(3,4,5)
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, YuNetStem, [16, 16]] # 0-P1/2 (3x3 s2 conv + ConvDPUnit)
+  - [-1, 1, nn.MaxPool2d, [2]] # 1-P2/4
+  - [-1, 1, Conv4LayerBlock, [64]] # 2
+  - [-1, 1, Conv4LayerBlock, [64]] # 3
+  - [-1, 1, nn.MaxPool2d, [2]] # 4-P3/8
+  - [-1, 1, Conv4LayerBlock, [64]] # 5 (P3/8 out)
+  - [-1, 1, nn.MaxPool2d, [2]] # 6-P4/16
+  - [-1, 1, Conv4LayerBlock, [64]] # 7 (P4/16 out)
+  - [-1, 1, nn.MaxPool2d, [2]] # 8-P5/32
+  - [-1, 1, Conv4LayerBlock, [64]] # 9
+  - [-1, 1, SPPF, [64, 5, 3, True]] # 10 (P5/32 out)
+
+# TFPN neck (top-down: lateral ConvDPUnit + nearest-upsample + add) and Pose26 head
+head:
+  - [10, 1, ConvDPUnit, [64]] # 11 P5 lateral
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 12
+  - [[7, 12], 1, Add, []] # 13 P4 + up(P5')
+  - [-1, 1, ConvDPUnit, [64]] # 14 P4 lateral
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 15
+  - [[5, 15], 1, Add, []] # 16 P3 + up(P4')
+  - [-1, 1, ConvDPUnit, [64]] # 17 P3 lateral
+
+  - [[17, 14, 11], 1, YuNetPoseHead, [nc, kpt_shape, 1]] # 18 original-style head, shared_convs=1

@@ -1,3 +1,7 @@
+cpp/pose_rknn_stream
+logs/
+*.sqsh
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -206,6 +210,9 @@ results.csv
 
 # CI test asset cache
 .ultralytics_cache/
+
+# Repo-local ultralytics settings dir used by script/sbatch_*.sh (YOLO_CONFIG_DIR)
+.ultralytics/
 
 # Fuzz media and datasets generated beside the weights dir, which is the checkout root outside CI
 fuzz-sources/
