@@ -368,12 +368,20 @@ class Model(torch.nn.Module):
         from datetime import datetime
 
         from ultralytics import __version__
+        from ultralytics.utils.torch_utils import qat_state, strip_qat
 
+        state = qat_state(self.model) if isinstance(self.model, torch.nn.Module) else None
+        model = (
+            deepcopy(self.model).half().to(memory_format=torch.contiguous_format)
+            if isinstance(self.model, torch.nn.Module)
+            else self.model
+        )
+        if isinstance(model, torch.nn.Module):
+            strip_qat(model)
         updates = {
             "ema": None,
-            "model": deepcopy(self.model).half().to(memory_format=torch.contiguous_format)
-            if isinstance(self.model, torch.nn.Module)
-            else self.model,
+            "model": model,
+            "modelopt": state,
             "date": datetime.now().astimezone().isoformat(),
             "version": __version__,
             "license": "AGPL-3.0 License (https://ultralytics.com/license)",
